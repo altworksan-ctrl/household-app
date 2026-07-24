@@ -1,3 +1,6 @@
+bash
+
+cat > /home/claude/household-app/src/components/MoneyTab.jsx << 'JSXEOF'
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { Plus, X, Receipt, Trash2, Camera, ImageOff } from "lucide-react";
 import { supabase } from "../supabaseClient";
@@ -361,3 +364,12 @@ export default function MoneyTab({
       )}
     </div>
   );
+}
+JSXEOF
+echo "written"
+Output
+
+written
+Done
+
+
