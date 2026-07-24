@@ -12,11 +12,11 @@ export default function OnboardingScreen({ userEmail, onCreated }) {
     setBusy(true);
     setError("");
 
-    const { data: household, error: hErr } = await supabase
+    const householdId = crypto.randomUUID();
+
+    const { error: hErr } = await supabase
       .from("households")
-      .insert({ name: houseName.trim() })
-      .select()
-      .single();
+      .insert({ id: householdId, name: houseName.trim() });
 
     if (hErr) {
       setError(hErr.message);
@@ -27,7 +27,7 @@ export default function OnboardingScreen({ userEmail, onCreated }) {
     const { data: { user } } = await supabase.auth.getUser();
 
     const { error: mErr } = await supabase.from("members").insert({
-      household_id: household.id,
+      household_id: householdId,
       user_id: user.id,
       email: userEmail,
       name: yourName.trim(),
