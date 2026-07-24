@@ -361,11 +361,3 @@ export default function MoneyTab({
       )}
     </div>
   );
-}
-JSXEOF
-echo "written"
-Output
-
-written
-
-
