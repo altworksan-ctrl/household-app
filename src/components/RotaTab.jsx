@@ -82,6 +82,20 @@ export default function RotaTab({ householdId, activeMembers, isAdmin, memberByI
   }, [monthKey, load]);
 
   useEffect(() => {
+    const channel = supabase
+      .channel(`rota-${householdId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rota_entries", filter: `household_id=eq.${householdId}` },
+        () => load(monthKey)
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [householdId, monthKey, load]);
+
+  useEffect(() => {
     // always resolve today's duty regardless of which month is being viewed
     (async () => {
       if (monthKey === todayMonthKey) return; // covered by entries already

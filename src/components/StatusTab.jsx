@@ -50,6 +50,20 @@ export default function StatusTab({ householdId, activeMembers, currentMember, i
     load();
   }, [load]);
 
+  useEffect(() => {
+    const channel = supabase
+      .channel(`payments-${householdId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "payments", filter: `household_id=eq.${householdId}` },
+        () => load()
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [householdId, load]);
+
   const rowFor = (memberId) => rows.find((r) => r.member_id === memberId);
 
   const toggle = async (memberId, field, current) => {

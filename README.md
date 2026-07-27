@@ -87,12 +87,23 @@ and whether a receipt is attached), the full rent/WiFi payment history, and
 the saved chore rota — one sheet each. This is on-demand, not automatic;
 see below for what a scheduled/automatic version would take.
 
+## Real-time sync
+
+All four tabs (Rota, Money, Status, and household/member changes) now sync
+live across devices using Supabase Realtime — if your admin reshuffles the
+rota or logs an expense, everyone else's screen updates within a second or
+two, no refresh needed. This needs one SQL step; see the top of this repo's
+setup history / your chat for the `alter publication supabase_realtime add
+table ...` statements if you haven't run them yet.
+
+## Push notifications
+
+See **PUSH_NOTIFICATIONS.md** for the full setup — this one needs a
+one-time deploy from your terminal (Supabase CLI + a scheduled function),
+since it has to run independently of anyone having the app open.
+
 ## Not built yet (possible next steps)
 - **Automatic scheduled backups** (e.g. a spreadsheet emailed to the admin
   every month without anyone opening the app) — needs a scheduled Supabase
   Edge Function plus the SMTP setup above to send it
-- Push notifications ("you're cooking today", "rent due in 3 days") —
-  needs a PWA service worker + a scheduled Supabase Edge Function
 - Passkey/biometric login as an extra layer on top of magic-link
-- Real-time sync across devices (currently refreshes on load / after
-  actions rather than pushing live updates)

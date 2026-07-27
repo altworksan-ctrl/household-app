@@ -1,9 +1,10 @@
-import React, { useState } from "react";
-import { LogOut, Shield, Users, Plus, Trash2, Download } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { LogOut, Shield, Users, Plus, Trash2, Download, Bell, BellOff } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { SectionCard, Tape } from "./Shared";
 import { tapeHex } from "../lib/helpers";
 import { exportHouseholdData } from "../lib/exportData";
+import { pushSupported, getPushSubscriptionStatus, enablePush, disablePush } from "../lib/push";
 
 export default function MeTab({ currentMember, members, householdId, houseName, refreshMembers, refreshHouseName, isAdmin }) {
   const [newName, setNewName] = useState("");
@@ -11,6 +12,37 @@ export default function MeTab({ currentMember, members, householdId, houseName, 
   const [localHouseName, setLocalHouseName] = useState(houseName);
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [pushStatus, setPushStatus] = useState("checking");
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState("");
+
+  useEffect(() => {
+    if (!pushSupported()) {
+      setPushStatus("unsupported");
+      return;
+    }
+    getPushSubscriptionStatus().then(setPushStatus);
+  }, []);
+
+  const toggleNotifications = async () => {
+    setPushError("");
+    setPushBusy(true);
+    try {
+      if (pushStatus === "subscribed") {
+        await disablePush(supabase);
+        setPushStatus("not-subscribed");
+      } else {
+        await enablePush(supabase, householdId, currentMember.id);
+        setPushStatus("subscribed");
+      }
+    } catch (e) {
+      setPushError(e.message);
+      const status = await getPushSubscriptionStatus();
+      setPushStatus(status);
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   const doExport = async () => {
     setExporting(true);
@@ -101,6 +133,36 @@ export default function MeTab({ currentMember, members, householdId, houseName, 
         >
           <LogOut size={15} /> Sign out
         </button>
+      </SectionCard>
+
+      <SectionCard>
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">Rota &amp; rent reminders</div>
+            <div className="text-xs text-[var(--ink-soft)] mt-0.5">
+              {pushStatus === "unsupported" &&
+                "Not available in this browser — on iPhone, add this site to your Home Screen first."}
+              {pushStatus === "denied" && "Blocked — enable notifications for this site in your phone settings."}
+              {pushStatus === "subscribed" && "On for this device."}
+              {(pushStatus === "not-subscribed" || pushStatus === "checking") && "Off for this device."}
+            </div>
+          </div>
+          {(pushStatus === "subscribed" || pushStatus === "not-subscribed") && (
+            <button
+              onClick={toggleNotifications}
+              disabled={pushBusy}
+              className="shrink-0 flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-50"
+              style={{
+                background: pushStatus === "subscribed" ? "var(--moss-tint)" : "var(--paper)",
+                color: pushStatus === "subscribed" ? "var(--moss)" : "var(--ink-soft)",
+              }}
+            >
+              {pushStatus === "subscribed" ? <Bell size={14} /> : <BellOff size={14} />}
+              {pushBusy ? "…" : pushStatus === "subscribed" ? "On" : "Turn on"}
+            </button>
+          )}
+        </div>
+        {pushError && <div className="text-xs text-[var(--rust)] mt-2">{pushError}</div>}
       </SectionCard>
 
       {isAdmin && (

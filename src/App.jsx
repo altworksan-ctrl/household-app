@@ -80,6 +80,26 @@ export default function App() {
     if (session) resolveHousehold();
   }, [session, resolveHousehold]);
 
+  useEffect(() => {
+    if (!household?.id) return;
+    const channel = supabase
+      .channel(`household-meta-${household.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "members", filter: `household_id=eq.${household.id}` },
+        refreshMembers
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "households", filter: `id=eq.${household.id}` },
+        refreshHouseName
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [household?.id, refreshMembers, refreshHouseName]);
+
   const refreshMembers = useCallback(async () => {
     if (!household) return;
     const { data } = await supabase.from("members").select("*").eq("household_id", household.id).order("created_at");

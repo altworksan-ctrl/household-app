@@ -78,6 +78,20 @@ export default function MoneyTab({
   }, [load]);
 
   useEffect(() => {
+    const channel = supabase
+      .channel(`expenses-${householdId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "expenses", filter: `household_id=eq.${householdId}` },
+        () => load()
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [householdId, load]);
+
+  useEffect(() => {
     if (currentMember?.is_admin) setPayer(currentMember.id);
   }, [currentMember]);
 
