@@ -12,6 +12,11 @@ export default function OnboardingScreen({ userEmail, onCreated }) {
     setBusy(true);
     setError("");
 
+    // Generate the id client-side and insert without asking for it back.
+    // (Right after insert, no member row exists yet, so the households
+    // SELECT policy — which requires membership — would block returning
+    // the row and surface as an RLS error even though the insert itself
+    // is fine. Knowing the id up front avoids needing that select.)
     const householdId = crypto.randomUUID();
 
     const { error: hErr } = await supabase

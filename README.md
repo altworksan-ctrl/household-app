@@ -79,7 +79,18 @@ live app instead of localhost.
    push notifications, since Safari tabs can't receive them but installed
    PWAs can.
 
+## Exporting records
+
+Admins can go to **Me** tab → **Export all records (Excel)** at any time to
+download a spreadsheet with every housemate, every expense (with who paid
+and whether a receipt is attached), the full rent/WiFi payment history, and
+the saved chore rota — one sheet each. This is on-demand, not automatic;
+see below for what a scheduled/automatic version would take.
+
 ## Not built yet (possible next steps)
+- **Automatic scheduled backups** (e.g. a spreadsheet emailed to the admin
+  every month without anyone opening the app) — needs a scheduled Supabase
+  Edge Function plus the SMTP setup above to send it
 - Push notifications ("you're cooking today", "rent due in 3 days") —
   needs a PWA service worker + a scheduled Supabase Edge Function
 - Passkey/biometric login as an extra layer on top of magic-link

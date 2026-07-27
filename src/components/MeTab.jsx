@@ -1,14 +1,25 @@
 import React, { useState } from "react";
-import { LogOut, Shield, Users, Plus, Trash2 } from "lucide-react";
+import { LogOut, Shield, Users, Plus, Trash2, Download } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { SectionCard, Tape } from "./Shared";
 import { tapeHex } from "../lib/helpers";
+import { exportHouseholdData } from "../lib/exportData";
 
 export default function MeTab({ currentMember, members, householdId, houseName, refreshMembers, refreshHouseName, isAdmin }) {
   const [newName, setNewName] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [localHouseName, setLocalHouseName] = useState(houseName);
   const [error, setError] = useState("");
+  const [exporting, setExporting] = useState(false);
+
+  const doExport = async () => {
+    setExporting(true);
+    try {
+      await exportHouseholdData(supabase, { id: householdId, name: houseName }, members);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const adminCount = members.filter((m) => m.is_admin).length;
 
@@ -94,6 +105,18 @@ export default function MeTab({ currentMember, members, householdId, houseName, 
 
       {isAdmin && (
         <>
+          <button
+            onClick={doExport}
+            disabled={exporting}
+            className="w-full flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+            style={{ background: "var(--denim)" }}
+          >
+            <Download size={15} /> {exporting ? "Preparing file…" : "Export all records (Excel)"}
+          </button>
+          <div className="text-xs text-[var(--ink-soft)] -mt-2 px-1">
+            Downloads members, every expense, rent/WiFi status, and the chore rota history as a spreadsheet.
+          </div>
+
           <div className="text-[10px] uppercase font-semibold text-[var(--ink-soft)] px-1">Household name</div>
           <SectionCard>
             <input
