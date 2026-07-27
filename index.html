@@ -1,18 +1,24 @@
-// Calls the daily-notifications edge function directly, using the current
-// logged-in session. supabase.functions.invoke() automatically attaches the
-// user's auth token — the function itself checks server-side that the
-// caller is an admin, and scopes the action to their own household only.
-export async function triggerNotification(supabase, payload) {
-  try {
-    const { data, error } = await supabase.functions.invoke("daily-notifications", {
-      body: payload,
-    });
-    if (error) throw error;
-    return data;
-  } catch (e) {
-    // Best-effort — a failed notification shouldn't block the user's action
-    // (e.g. adding an expense should still succeed even if the push fails).
-    console.warn("Notification trigger failed:", e.message);
-    return null;
-  }
-}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#EAE7DC" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Household" />
+    <title>Household</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

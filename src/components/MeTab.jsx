@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { LogOut, Shield, Users, Plus, Trash2, Download, Bell, BellOff } from "lucide-react";
+import { LogOut, Shield, Users, Plus, Trash2, Download, Bell, BellOff, Send } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { SectionCard, Tape } from "./Shared";
 import { tapeHex } from "../lib/helpers";
 import { exportHouseholdData } from "../lib/exportData";
 import { pushSupported, getPushSubscriptionStatus, enablePush, disablePush } from "../lib/push";
+import { triggerNotification } from "../lib/notify";
 
 export default function MeTab({ currentMember, members, householdId, houseName, refreshMembers, refreshHouseName, isAdmin }) {
   const [newName, setNewName] = useState("");
@@ -15,6 +16,18 @@ export default function MeTab({ currentMember, members, householdId, houseName, 
   const [pushStatus, setPushStatus] = useState("checking");
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState("");
+
+  const sendNow = async () => {
+    setSending(true);
+    setSendResult("");
+    const result = await triggerNotification(supabase, { type: "all", force: true });
+    setSending(false);
+    setSendResult(
+      result ? `Sent ${result.notificationsSent} notification${result.notificationsSent === 1 ? "" : "s"}.` : "Couldn't send — try again."
+    );
+  };
 
   useEffect(() => {
     if (!pushSupported()) {
@@ -167,6 +180,16 @@ export default function MeTab({ currentMember, members, householdId, houseName, 
 
       {isAdmin && (
         <>
+          <button
+            onClick={sendNow}
+            disabled={sending}
+            className="w-full flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+            style={{ background: "var(--mustard)" }}
+          >
+            <Send size={15} /> {sending ? "Sending…" : "Send today's reminders now"}
+          </button>
+          {sendResult && <div className="text-xs text-[var(--ink-soft)] -mt-2 px-1">{sendResult}</div>}
+
           <button
             onClick={doExport}
             disabled={exporting}

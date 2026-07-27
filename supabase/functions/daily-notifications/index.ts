@@ -1,6 +1,13 @@
-// Supabase Edge Function — runs once a day (via cron, see README)
-// - Notifies today's cook and cleaner for every household
-// - On the 1st and 25th of the month, nudges anyone with unpaid rent/WiFi
+// Supabase Edge Function
+// Two ways to call this:
+//  1. Cron (scheduled) — header "x-cron-secret" matches CRON_SECRET.
+//     Runs across ALL households. Used for the daily rota/payment jobs.
+//  2. Admin, from the app — a real logged-in admin's session token
+//     (sent automatically by supabase.functions.invoke()). Scoped to
+//     ONLY that admin's own household — they can't trigger anyone else's.
+//
+// Body: { type: "rota" | "payments" | "expense" | "all", force?: boolean,
+//         expenseDescription?: string, expenseAmount?: number }
 //
 // Required secrets (set with `supabase secrets set`):
 //   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, CRON_SECRET
@@ -15,6 +22,12 @@ const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY");
 const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY");
 const VAPID_SUBJECT = Deno.env.get("VAPID_SUBJECT") || "mailto:admin@example.com";
 const CRON_SECRET = Deno.env.get("CRON_SECRET");
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-cron-secret, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
 
 webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
@@ -32,7 +45,6 @@ async function notifyMember(memberId, title, body) {
       );
       sent++;
     } catch (err) {
-      // subscription is gone (browser cleared it, uninstalled, etc.) — remove it
       if (err?.statusCode === 404 || err?.statusCode === 410) {
         await supabase.from("push_subscriptions").delete().eq("id", sub.id);
       }
@@ -42,11 +54,53 @@ async function notifyMember(memberId, title, body) {
 }
 
 Deno.serve(async (req) => {
-  if (CRON_SECRET) {
-    const header = req.headers.get("x-cron-secret");
-    if (header !== CRON_SECRET) {
-      return new Response("Unauthorized", { status: 401 });
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: CORS_HEADERS });
+  }
+
+  // --- authorize: either the cron secret, or a real admin's session ---
+  let scopedHouseholdId = null; // null = unrestricted (cron path only)
+  let authorized = false;
+
+  const cronHeader = req.headers.get("x-cron-secret");
+  if (CRON_SECRET && cronHeader === CRON_SECRET) {
+    authorized = true;
+  } else {
+    const authHeader = req.headers.get("authorization") || "";
+    if (authHeader.startsWith("Bearer ")) {
+      const jwt = authHeader.slice(7);
+      const { data: userData } = await supabase.auth.getUser(jwt);
+      if (userData?.user?.email) {
+        const { data: member } = await supabase
+          .from("members")
+          .select("*")
+          .eq("email", userData.user.email)
+          .eq("is_admin", true)
+          .maybeSingle();
+        if (member) {
+          authorized = true;
+          scopedHouseholdId = member.household_id; // admins can only trigger their own household
+        }
+      }
     }
+  }
+
+  if (!authorized) {
+    return new Response("Unauthorized", { status: 401, headers: CORS_HEADERS });
+  }
+
+  let type = "all";
+  let force = false;
+  let expenseDescription = "a new expense";
+  let expenseAmount = null;
+  try {
+    const body = await req.json();
+    if (body?.type) type = body.type;
+    if (body?.force === true) force = true;
+    if (body?.expenseDescription) expenseDescription = body.expenseDescription;
+    if (typeof body?.expenseAmount === "number") expenseAmount = body.expenseAmount;
+  } catch {
+    // no body — default to "all", useful for manual cron testing
   }
 
   const today = new Date();
@@ -54,37 +108,42 @@ Deno.serve(async (req) => {
   const monthKey = dateKey.slice(0, 7);
   const dayOfMonth = today.getUTCDate();
 
-  const { data: households } = await supabase.from("households").select("id, name");
+  let householdsQuery = supabase.from("households").select("id, name");
+  if (scopedHouseholdId) householdsQuery = householdsQuery.eq("id", scopedHouseholdId);
+  const { data: households } = await householdsQuery;
+
   let notificationsSent = 0;
 
   for (const hh of households ?? []) {
     // --- rota reminder ---
-    const { data: rotaEntry } = await supabase
-      .from("rota_entries")
-      .select("*")
-      .eq("household_id", hh.id)
-      .eq("date", dateKey)
-      .maybeSingle();
+    if (type === "rota" || type === "all") {
+      const { data: rotaEntry } = await supabase
+        .from("rota_entries")
+        .select("*")
+        .eq("household_id", hh.id)
+        .eq("date", dateKey)
+        .maybeSingle();
 
-    if (rotaEntry) {
-      if (rotaEntry.cook_id) {
-        notificationsSent += await notifyMember(
-          rotaEntry.cook_id,
-          "🍳 You're cooking today",
-          `Today's your turn to cook at ${hh.name}.`
-        );
-      }
-      if (rotaEntry.clean_id && rotaEntry.clean_id !== rotaEntry.cook_id) {
-        notificationsSent += await notifyMember(
-          rotaEntry.clean_id,
-          "🧹 You're cleaning today",
-          `Today's your turn to clean at ${hh.name}.`
-        );
+      if (rotaEntry) {
+        if (rotaEntry.cook_id) {
+          notificationsSent += await notifyMember(
+            rotaEntry.cook_id,
+            "🍳 You're cooking today",
+            `Today's your turn to cook at ${hh.name}.`
+          );
+        }
+        if (rotaEntry.clean_id && rotaEntry.clean_id !== rotaEntry.cook_id) {
+          notificationsSent += await notifyMember(
+            rotaEntry.clean_id,
+            "🧹 You're cleaning today",
+            `Today's your turn to clean at ${hh.name}.`
+          );
+        }
       }
     }
 
-    // --- rent / wifi reminder (1st and 25th of the month) ---
-    if (dayOfMonth === 1 || dayOfMonth === 25) {
+    // --- rent / wifi reminder (1st and 25th of the month, or forced) ---
+    if ((type === "payments" || type === "all") && (force || dayOfMonth === 1 || dayOfMonth === 25)) {
       const { data: members } = await supabase
         .from("members")
         .select("*")
@@ -114,9 +173,47 @@ Deno.serve(async (req) => {
         }
       }
     }
+
+    // --- new expense notification ---
+    if (type === "expense") {
+      const { data: members } = await supabase
+        .from("members")
+        .select("*")
+        .eq("household_id", hh.id)
+        .eq("active", true);
+
+      const activeCount = (members ?? []).length;
+      const monthStart = `${monthKey}-01`;
+      const nextMonth = new Date(today.getUTCFullYear(), today.getUTCMonth() + 1, 1);
+      const monthEnd = `${nextMonth.getUTCFullYear()}-${pad(nextMonth.getUTCMonth() + 1)}-01`;
+
+      const { data: expenses } = await supabase
+        .from("expenses")
+        .select("*")
+        .eq("household_id", hh.id)
+        .gte("date", monthStart)
+        .lt("date", monthEnd);
+
+      const total = (expenses ?? []).reduce((s, e) => s + Number(e.amount), 0);
+      const share = activeCount ? total / activeCount : 0;
+
+      for (const m of members ?? []) {
+        if (m.is_admin) continue;
+        const paid = (expenses ?? [])
+          .filter((e) => e.member_id === m.id)
+          .reduce((s, e) => s + Number(e.amount), 0);
+        const owed = Math.max(0, share - paid);
+        const amountText = expenseAmount != null ? `£${expenseAmount.toFixed(2)} added for ${expenseDescription}. ` : "";
+        notificationsSent += await notifyMember(
+          m.id,
+          "🛒 New grocery expense",
+          `${amountText}You now owe £${owed.toFixed(2)} this month.`
+        );
+      }
+    }
   }
 
-  return new Response(JSON.stringify({ ok: true, notificationsSent }), {
-    headers: { "Content-Type": "application/json" },
+  return new Response(JSON.stringify({ ok: true, type, notificationsSent }), {
+    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
   });
 });

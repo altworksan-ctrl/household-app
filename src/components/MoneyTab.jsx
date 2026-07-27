@@ -3,6 +3,7 @@ import { Plus, X, Receipt, Trash2, Camera, ImageOff } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { MonthNav, SectionCard, MemberChip } from "./Shared";
 import { monthRange, money, tapeHex, pad } from "../lib/helpers";
+import { triggerNotification } from "../lib/notify";
 
 function Lightbox({ url, onClose }) {
   if (!url) return null;
@@ -127,18 +128,24 @@ export default function MoneyTab({
     }
 
     const dd = /^\d{1,2}$/.test(day) ? pad(day) : pad(new Date().getDate());
+    const finalDesc = desc.trim() || "Groceries";
     const { error } = await supabase.from("expenses").insert({
       id: expenseId,
       household_id: householdId,
       member_id: payer,
       amount: amt,
-      description: desc.trim() || "Groceries",
+      description: finalDesc,
       date: `${monthKey}-${dd}`,
       receipt_path: receiptPath,
     });
 
     setUploading(false);
     if (!error) {
+      triggerNotification(supabase, {
+        type: "expense",
+        expenseDescription: finalDesc,
+        expenseAmount: amt,
+      });
       setAmount("");
       setDesc("");
       setReceiptFile(null);
