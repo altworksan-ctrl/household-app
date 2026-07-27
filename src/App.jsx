@@ -80,6 +80,19 @@ export default function App() {
     if (session) resolveHousehold();
   }, [session, resolveHousehold]);
 
+  const refreshMembers = useCallback(async () => {
+    if (!household) return;
+    const { data } = await supabase.from("members").select("*").eq("household_id", household.id).order("created_at");
+    setMembers(data || []);
+    setCurrentMember((data || []).find((m) => m.email === session?.user?.email) || null);
+  }, [household, session]);
+
+  const refreshHouseName = useCallback(async () => {
+    if (!household) return;
+    const { data } = await supabase.from("households").select("*").eq("id", household.id).single();
+    setHousehold(data);
+  }, [household]);
+
   useEffect(() => {
     if (!household?.id) return;
     const channel = supabase
@@ -99,19 +112,6 @@ export default function App() {
       supabase.removeChannel(channel);
     };
   }, [household?.id, refreshMembers, refreshHouseName]);
-
-  const refreshMembers = useCallback(async () => {
-    if (!household) return;
-    const { data } = await supabase.from("members").select("*").eq("household_id", household.id).order("created_at");
-    setMembers(data || []);
-    setCurrentMember((data || []).find((m) => m.email === session?.user?.email) || null);
-  }, [household, session]);
-
-  const refreshHouseName = useCallback(async () => {
-    if (!household) return;
-    const { data } = await supabase.from("households").select("*").eq("id", household.id).single();
-    setHousehold(data);
-  }, [household]);
 
   const memberById = Object.fromEntries(members.map((m) => [m.id, m]));
   const activeMembers = members.filter((m) => m.active);
