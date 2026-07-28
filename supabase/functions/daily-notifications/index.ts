@@ -1,16 +1,19 @@
 // Supabase Edge Function
 // Two ways to call this:
 //  1. Cron (scheduled) — header "x-cron-secret" matches CRON_SECRET.
-//     Runs across ALL households. Used for the daily rota/payment jobs.
-//  2. Admin, from the app — a real logged-in admin's session token
-//     (sent automatically by supabase.functions.invoke()). Scoped to
-//     ONLY that admin's own household — they can't trigger anyone else's.
+//     Runs across ALL households.
+//  2. Admin, from the app — a real logged-in admin's session token.
+//     Scoped to ONLY that admin's own household.
 //
 // Body: { type: "rota" | "payments" | "expense" | "all", force?: boolean,
 //         expenseDescription?: string, expenseAmount?: number }
 //
-// Required secrets (set with `supabase secrets set`):
-//   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, CRON_SECRET
+// Every notification is logged to the `notifications` table (so the app's
+// in-app history works) regardless of whether a push subscription exists —
+// push delivery is best-effort on top of that.
+//
+// Required secrets: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT,
+// CRON_SECRET. Optional: HOUSEHOLD_TIMEZONE (defaults to Europe/London).
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided automatically.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -22,10 +25,11 @@ const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY");
 const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY");
 const VAPID_SUBJECT = Deno.env.get("VAPID_SUBJECT") || "mailto:admin@example.com";
 const CRON_SECRET = Deno.env.get("CRON_SECRET");
+const HOUSEHOLD_TIMEZONE = Deno.env.get("HOUSEHOLD_TIMEZONE") || "Europe/London";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-cron-secret, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -34,7 +38,64 @@ const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 
 const pad = (n) => String(n).padStart(2, "0");
 
-async function notifyMember(memberId, title, body) {
+function getLocalDateParts(timeZone) {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = fmt.formatToParts(new Date());
+  const y = parts.find((p) => p.type === "year").value;
+  const m = parts.find((p) => p.type === "month").value;
+  const d = parts.find((p) => p.type === "day").value;
+  return { dateKey: `${y}-${m}-${d}`, monthKey: `${y}-${m}`, dayOfMonth: Number(d) };
+}
+
+function nextMonthStart(monthKey) {
+  const [y, m] = monthKey.split("-").map(Number);
+  const next = new Date(Date.UTC(y, m, 1)); // m is 1-indexed, so this rolls to next month
+  return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-01`;
+}
+
+async function computeOwed(householdId, monthKey) {
+  const { data: members } = await supabase
+    .from("members")
+    .select("*")
+    .eq("household_id", householdId)
+    .eq("active", true);
+  const activeCount = (members ?? []).length;
+  const monthStart = `${monthKey}-01`;
+  const monthEnd = nextMonthStart(monthKey);
+
+  const { data: expenses } = await supabase
+    .from("expenses")
+    .select("*")
+    .eq("household_id", householdId)
+    .gte("date", monthStart)
+    .lt("date", monthEnd);
+
+  const { data: settlements } = await supabase
+    .from("settlements")
+    .select("*")
+    .eq("household_id", householdId)
+    .eq("month", monthKey);
+
+  const total = (expenses ?? []).reduce((s, e) => s + Number(e.amount), 0);
+  const share = activeCount ? total / activeCount : 0;
+
+  const owedByMember = {};
+  for (const m of members ?? []) {
+    const paid = (expenses ?? []).filter((e) => e.member_id === m.id).reduce((s, e) => s + Number(e.amount), 0);
+    const settled = (settlements ?? []).filter((s2) => s2.member_id === m.id).reduce((s, s2) => s + Number(s2.amount), 0);
+    owedByMember[m.id] = Math.max(0, share - paid - settled);
+  }
+  return { members: members ?? [], owedByMember };
+}
+
+async function notifyMember(householdId, memberId, title, body, kind) {
+  await supabase.from("notifications").insert({ household_id: householdId, member_id: memberId, title, body, kind });
+
   const { data: subs } = await supabase.from("push_subscriptions").select("*").eq("member_id", memberId);
   let sent = 0;
   for (const sub of subs ?? []) {
@@ -58,8 +119,7 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: CORS_HEADERS });
   }
 
-  // --- authorize: either the cron secret, or a real admin's session ---
-  let scopedHouseholdId = null; // null = unrestricted (cron path only)
+  let scopedHouseholdId = null;
   let authorized = false;
 
   const cronHeader = req.headers.get("x-cron-secret");
@@ -79,7 +139,7 @@ Deno.serve(async (req) => {
           .maybeSingle();
         if (member) {
           authorized = true;
-          scopedHouseholdId = member.household_id; // admins can only trigger their own household
+          scopedHouseholdId = member.household_id;
         }
       }
     }
@@ -100,13 +160,10 @@ Deno.serve(async (req) => {
     if (body?.expenseDescription) expenseDescription = body.expenseDescription;
     if (typeof body?.expenseAmount === "number") expenseAmount = body.expenseAmount;
   } catch {
-    // no body — default to "all", useful for manual cron testing
+    // no body — default to "all"
   }
 
-  const today = new Date();
-  const dateKey = `${today.getUTCFullYear()}-${pad(today.getUTCMonth() + 1)}-${pad(today.getUTCDate())}`;
-  const monthKey = dateKey.slice(0, 7);
-  const dayOfMonth = today.getUTCDate();
+  const { dateKey, monthKey, dayOfMonth } = getLocalDateParts(HOUSEHOLD_TIMEZONE);
 
   let householdsQuery = supabase.from("households").select("id, name");
   if (scopedHouseholdId) householdsQuery = householdsQuery.eq("id", scopedHouseholdId);
@@ -127,22 +184,26 @@ Deno.serve(async (req) => {
       if (rotaEntry) {
         if (rotaEntry.cook_id) {
           notificationsSent += await notifyMember(
+            hh.id,
             rotaEntry.cook_id,
             "🍳 You're cooking today",
-            `Today's your turn to cook at ${hh.name}.`
+            `Today's your turn to cook at ${hh.name}.`,
+            "rota"
           );
         }
         if (rotaEntry.clean_id && rotaEntry.clean_id !== rotaEntry.cook_id) {
           notificationsSent += await notifyMember(
+            hh.id,
             rotaEntry.clean_id,
             "🧹 You're cleaning today",
-            `Today's your turn to clean at ${hh.name}.`
+            `Today's your turn to clean at ${hh.name}.`,
+            "rota"
           );
         }
       }
     }
 
-    // --- rent / wifi reminder (1st and 25th of the month, or forced) ---
+    // --- rent / wifi reminder (1st and 25th, or forced) ---
     if ((type === "payments" || type === "all") && (force || dayOfMonth === 1 || dayOfMonth === 25)) {
       const { data: members } = await supabase
         .from("members")
@@ -166,49 +227,48 @@ Deno.serve(async (req) => {
         if (!rentDone || !wifiDone) {
           const missing = [!rentDone && "rent", !wifiDone && "WiFi"].filter(Boolean).join(" & ");
           notificationsSent += await notifyMember(
+            hh.id,
             m.id,
             "💷 Payment reminder",
-            `Your ${missing} for ${hh.name} is still marked unpaid.`
+            `Your ${missing} for ${hh.name} is still marked unpaid.`,
+            "payment"
           );
         }
       }
     }
 
-    // --- new expense notification ---
+    // --- new expense notification (triggered right after admin logs one) ---
     if (type === "expense") {
-      const { data: members } = await supabase
-        .from("members")
-        .select("*")
-        .eq("household_id", hh.id)
-        .eq("active", true);
-
-      const activeCount = (members ?? []).length;
-      const monthStart = `${monthKey}-01`;
-      const nextMonth = new Date(today.getUTCFullYear(), today.getUTCMonth() + 1, 1);
-      const monthEnd = `${nextMonth.getUTCFullYear()}-${pad(nextMonth.getUTCMonth() + 1)}-01`;
-
-      const { data: expenses } = await supabase
-        .from("expenses")
-        .select("*")
-        .eq("household_id", hh.id)
-        .gte("date", monthStart)
-        .lt("date", monthEnd);
-
-      const total = (expenses ?? []).reduce((s, e) => s + Number(e.amount), 0);
-      const share = activeCount ? total / activeCount : 0;
-
-      for (const m of members ?? []) {
+      const { members, owedByMember } = await computeOwed(hh.id, monthKey);
+      for (const m of members) {
         if (m.is_admin) continue;
-        const paid = (expenses ?? [])
-          .filter((e) => e.member_id === m.id)
-          .reduce((s, e) => s + Number(e.amount), 0);
-        const owed = Math.max(0, share - paid);
+        const owed = owedByMember[m.id] ?? 0;
         const amountText = expenseAmount != null ? `£${expenseAmount.toFixed(2)} added for ${expenseDescription}. ` : "";
         notificationsSent += await notifyMember(
+          hh.id,
           m.id,
           "🛒 New grocery expense",
-          `${amountText}You now owe £${owed.toFixed(2)} this month.`
+          `${amountText}You now owe £${owed.toFixed(2)} this month.`,
+          "expense"
         );
+      }
+    }
+
+    // --- grocery balance reminder (only on the manual admin "send now") ---
+    if (type === "all") {
+      const { members, owedByMember } = await computeOwed(hh.id, monthKey);
+      for (const m of members) {
+        if (m.is_admin) continue;
+        const owed = owedByMember[m.id] ?? 0;
+        if (owed > 0.01) {
+          notificationsSent += await notifyMember(
+            hh.id,
+            m.id,
+            "🛒 Grocery balance reminder",
+            `You currently owe £${owed.toFixed(2)} this month.`,
+            "grocery-balance"
+          );
+        }
       }
     }
   }

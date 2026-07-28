@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { Plus, X, Receipt, Trash2, Camera, ImageOff } from "lucide-react";
+import { Plus, X, Receipt, Trash2, Camera, CheckCircle2, Banknote } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { MonthNav, SectionCard, MemberChip } from "./Shared";
 import { monthRange, money, tapeHex, pad } from "../lib/helpers";
@@ -21,6 +21,61 @@ function Lightbox({ url, onClose }) {
   );
 }
 
+function LogPaymentRow({ member, owed, onLog }) {
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState("");
+
+  useEffect(() => {
+    if (open) setAmount(owed.toFixed(2));
+  }, [open, owed]);
+
+  const submit = () => {
+    const amt = parseFloat(amount);
+    if (!amt || amt <= 0) return;
+    onLog(member.id, amt);
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <div className="flex items-center justify-between text-sm">
+        <span className="font-semibold">{member.name}</span>
+        <div className="flex items-center gap-2">
+          <span className="font-mono font-semibold" style={{ color: "var(--rust)" }}>
+            {money(owed)}
+          </span>
+          <button
+            onClick={() => setOpen(true)}
+            className="text-xs font-semibold rounded-md px-2 py-1"
+            style={{ background: "var(--moss-tint)", color: "var(--moss)" }}
+          >
+            Log payment
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm font-semibold flex-1 truncate">{member.name}</span>
+      <input
+        inputMode="decimal"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        className="w-20 rounded-lg border px-2 py-1.5 text-sm font-mono"
+        style={{ borderColor: "var(--line)" }}
+      />
+      <button onClick={submit} className="text-xs font-semibold rounded-md px-2 py-1.5 text-white" style={{ background: "var(--moss)" }}>
+        Save
+      </button>
+      <button onClick={() => setOpen(false)} className="text-xs text-[var(--ink-soft)] px-1">
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 export default function MoneyTab({
   householdId,
   activeMembers,
@@ -31,6 +86,7 @@ export default function MoneyTab({
   setMonthKey,
 }) {
   const [expenses, setExpenses] = useState([]);
+  const [settlements, setSettlements] = useState([]);
   const [receiptUrls, setReceiptUrls] = useState({});
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -46,15 +102,19 @@ export default function MoneyTab({
   const load = useCallback(async () => {
     setLoading(true);
     const { start, end } = monthRange(monthKey);
-    const { data } = await supabase
-      .from("expenses")
-      .select("*")
-      .eq("household_id", householdId)
-      .gte("date", start)
-      .lt("date", end)
-      .order("date", { ascending: false });
-    const rows = data || [];
+    const [{ data: expenseRows }, { data: settlementRows }] = await Promise.all([
+      supabase
+        .from("expenses")
+        .select("*")
+        .eq("household_id", householdId)
+        .gte("date", start)
+        .lt("date", end)
+        .order("date", { ascending: false }),
+      supabase.from("settlements").select("*").eq("household_id", householdId).eq("month", monthKey),
+    ]);
+    const rows = expenseRows || [];
     setExpenses(rows);
+    setSettlements(settlementRows || []);
     setLoading(false);
 
     const withReceipts = rows.filter((r) => r.receipt_path);
@@ -62,9 +122,7 @@ export default function MoneyTab({
       const urlMap = {};
       await Promise.all(
         withReceipts.map(async (r) => {
-          const { data: signed } = await supabase.storage
-            .from("receipts")
-            .createSignedUrl(r.receipt_path, 3600);
+          const { data: signed } = await supabase.storage.from("receipts").createSignedUrl(r.receipt_path, 3600);
           if (signed) urlMap[r.id] = signed.signedUrl;
         })
       );
@@ -80,10 +138,15 @@ export default function MoneyTab({
 
   useEffect(() => {
     const channel = supabase
-      .channel(`expenses-${householdId}`)
+      .channel(`money-${householdId}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "expenses", filter: `household_id=eq.${householdId}` },
+        () => load()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "settlements", filter: `household_id=eq.${householdId}` },
         () => load()
       )
       .subscribe();
@@ -101,7 +164,8 @@ export default function MoneyTab({
 
   const balances = activeMembers.map((m) => {
     const paid = expenses.filter((e) => e.member_id === m.id).reduce((s, e) => s + Number(e.amount), 0);
-    return { id: m.id, name: m.name, color: tapeHex(m), owed: Math.max(0, share - paid) };
+    const settled = settlements.filter((s) => s.member_id === m.id).reduce((s, s2) => s + Number(s2.amount), 0);
+    return { id: m.id, name: m.name, color: tapeHex(m), owed: Math.max(0, share - paid - settled), settled };
   });
   const myBalance = balances.find((b) => b.id === currentMember?.id);
   const owingMembers = balances.filter((b) => b.owed > 0.01 && !memberById[b.id]?.is_admin);
@@ -141,11 +205,7 @@ export default function MoneyTab({
 
     setUploading(false);
     if (!error) {
-      triggerNotification(supabase, {
-        type: "expense",
-        expenseDescription: finalDesc,
-        expenseAmount: amt,
-      });
+      triggerNotification(supabase, { type: "expense", expenseDescription: finalDesc, expenseAmount: amt });
       setAmount("");
       setDesc("");
       setReceiptFile(null);
@@ -159,6 +219,16 @@ export default function MoneyTab({
       await supabase.storage.from("receipts").remove([e.receipt_path]);
     }
     await supabase.from("expenses").delete().eq("id", e.id);
+    load();
+  };
+
+  const logPayment = async (memberId, amt) => {
+    await supabase.from("settlements").insert({
+      household_id: householdId,
+      member_id: memberId,
+      month: monthKey,
+      amount: amt,
+    });
     load();
   };
 
@@ -199,6 +269,11 @@ export default function MoneyTab({
                 {money(myBalance.owed)}
               </span>
             )}
+          </div>
+        )}
+        {!isAdmin && myBalance?.settled > 0.01 && (
+          <div className="text-xs text-[var(--ink-soft)] mt-2 px-1">
+            {money(myBalance.settled)} already paid toward this month.
           </div>
         )}
       </SectionCard>
@@ -346,18 +421,17 @@ export default function MoneyTab({
 
       {isAdmin && (
         <>
-          <div className="text-[10px] uppercase font-semibold text-[var(--ink-soft)] mb-1.5 px-1">Who owes you</div>
-          <SectionCard className="space-y-2">
+          <div className="text-[10px] uppercase font-semibold text-[var(--ink-soft)] mb-1.5 px-1 flex items-center gap-1.5">
+            <Banknote size={12} /> Who owes you
+          </div>
+          <SectionCard className="space-y-3">
             {owingMembers.length === 0 ? (
-              <div className="text-sm text-[var(--ink-soft)] text-center py-2">Everyone's settled up.</div>
+              <div className="text-sm text-[var(--ink-soft)] text-center py-2 flex items-center justify-center gap-1.5">
+                <CheckCircle2 size={14} /> Everyone's settled up.
+              </div>
             ) : (
               owingMembers.map((b) => (
-                <div key={b.id} className="flex items-center justify-between text-sm">
-                  <span className="font-semibold">{b.name}</span>
-                  <span className="font-mono font-semibold" style={{ color: "var(--rust)" }}>
-                    {money(b.owed)}
-                  </span>
-                </div>
+                <LogPaymentRow key={b.id} member={{ id: b.id, name: b.name }} owed={b.owed} onLog={logPayment} />
               ))
             )}
           </SectionCard>

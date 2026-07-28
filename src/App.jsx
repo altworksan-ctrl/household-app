@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { ChefHat, Wallet, CheckSquare, User } from "lucide-react";
+import { ChefHat, Wallet, CheckSquare, User, Bell } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import LoginScreen from "./components/LoginScreen";
 import OnboardingScreen from "./components/OnboardingScreen";
 import RotaTab from "./components/RotaTab";
 import MoneyTab from "./components/MoneyTab";
 import StatusTab from "./components/StatusTab";
+import NotificationsTab from "./components/NotificationsTab";
 import MeTab from "./components/MeTab";
 import { tapeHex, monthKeyOf } from "./lib/helpers";
 
@@ -13,6 +14,7 @@ const TABS = [
   { id: "rota", label: "Rota", icon: ChefHat },
   { id: "money", label: "Money", icon: Wallet },
   { id: "status", label: "Status", icon: CheckSquare },
+  { id: "alerts", label: "Alerts", icon: Bell },
   { id: "me", label: "Me", icon: User },
 ];
 
@@ -191,6 +193,7 @@ export default function App() {
             setMonthKey={setStatusMonth}
           />
         )}
+        {tab === "alerts" && <NotificationsTab currentMember={currentMember} />}
         {tab === "me" && (
           <MeTab
             currentMember={currentMember}
@@ -204,7 +207,7 @@ export default function App() {
         )}
 
         <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto border-t" style={{ background: "var(--stub)", borderColor: "var(--line)" }}>
-          <div className="grid grid-cols-4">
+          <div className="grid grid-cols-5">
             {TABS.map((t) => {
               const Icon = t.icon;
               const active = tab === t.id;

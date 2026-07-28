@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { ChefHat, Sparkles, RefreshCw } from "lucide-react";
+import { ChefHat, Sparkles } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { MonthNav, SectionCard, MemberChip } from "./Shared";
 import {
@@ -53,6 +53,20 @@ export default function RotaTab({ householdId, activeMembers, isAdmin, memberByI
 
   const todayKey = dateKeyOf(new Date());
   const todayMonthKey = monthKeyOf(new Date());
+  const isCurrentMonth = monthKey === todayMonthKey;
+
+  const persistEntries = useCallback(
+    async (rows) => {
+      if (!isAdmin) return;
+      await supabase
+        .from("rota_entries")
+        .upsert(
+          rows.map((r) => ({ household_id: householdId, date: r.date, cook_id: r.cook_id, clean_id: r.clean_id })),
+          { onConflict: "household_id,date" }
+        );
+    },
+    [householdId, isAdmin]
+  );
 
   const load = useCallback(
     async (mKey) => {
@@ -69,12 +83,16 @@ export default function RotaTab({ householdId, activeMembers, isAdmin, memberByI
       let rows = data || [];
       if (rows.length === 0 && activeMembers.length > 0) {
         rows = generateMonthEntries(mKey, activeMembers);
+        // silently save it the first time anyone (with admin rights) views
+        // an ungenerated month — no manual "reshuffle" button needed, and
+        // this never overwrites a month that's already been saved/edited
+        if (isAdmin) persistEntries(rows);
       }
       setEntries(rows);
       setLoading(false);
       return rows;
     },
-    [householdId, activeMembers]
+    [householdId, activeMembers, isAdmin, persistEntries]
   );
 
   useEffect(() => {
@@ -96,9 +114,8 @@ export default function RotaTab({ householdId, activeMembers, isAdmin, memberByI
   }, [householdId, monthKey, load]);
 
   useEffect(() => {
-    // always resolve today's duty regardless of which month is being viewed
     (async () => {
-      if (monthKey === todayMonthKey) return; // covered by entries already
+      if (monthKey === todayMonthKey) return;
       const rows = await load(todayMonthKey);
       const t = rows.find((e) => e.date === todayKey);
       setTodayEntry(t || null);
@@ -112,16 +129,6 @@ export default function RotaTab({ householdId, activeMembers, isAdmin, memberByI
     }
   }, [entries, monthKey, todayMonthKey, todayKey]);
 
-  const persistEntries = async (rows) => {
-    if (!isAdmin) return;
-    await supabase
-      .from("rota_entries")
-      .upsert(
-        rows.map((r) => ({ household_id: householdId, date: r.date, cook_id: r.cook_id, clean_id: r.clean_id })),
-        { onConflict: "household_id,date" }
-      );
-  };
-
   const updateEntry = async (date, field, value) => {
     const next = entries.map((e) => (e.date === date ? { ...e, [field]: value } : e));
     setEntries(next);
@@ -129,11 +136,8 @@ export default function RotaTab({ householdId, activeMembers, isAdmin, memberByI
     await persistEntries([row]);
   };
 
-  const regenerate = async () => {
-    const fresh = generateMonthEntries(monthKey, activeMembers);
-    setEntries(fresh);
-    await persistEntries(fresh);
-  };
+  // in the current month, only show today onward — past days drop off
+  const visibleEntries = isCurrentMonth ? entries.filter((e) => e.date >= todayKey) : entries;
 
   return (
     <div className="px-4 pt-4 pb-24">
@@ -143,25 +147,19 @@ export default function RotaTab({ householdId, activeMembers, isAdmin, memberByI
         <MonthNav monthKey={monthKey} onChange={setMonthKey} />
       </SectionCard>
 
-      {isAdmin && (
-        <button
-          onClick={regenerate}
-          className="w-full mb-3 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold border"
-          style={{ borderColor: "var(--line)", color: "var(--ink)" }}
-        >
-          <RefreshCw size={15} /> Reshuffle this month
-        </button>
-      )}
-
       {loading ? (
         <div className="text-sm text-[var(--ink-soft)] text-center py-8">Loading…</div>
       ) : activeMembers.length === 0 ? (
         <div className="text-sm text-[var(--ink-soft)] text-center py-8">
           Add active housemates in the Me tab to build a rota.
         </div>
+      ) : visibleEntries.length === 0 ? (
+        <div className="text-sm text-[var(--ink-soft)] text-center py-8">
+          Nothing left to show this month.
+        </div>
       ) : (
         <div className="space-y-1.5">
-          {entries.map((e) => {
+          {visibleEntries.map((e) => {
             const cook = memberById[e.cook_id];
             const clean = memberById[e.clean_id];
             const isToday = e.date === todayKey;
