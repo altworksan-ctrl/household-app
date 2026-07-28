@@ -94,7 +94,11 @@ async function computeOwed(householdId, monthKey) {
 }
 
 async function notifyMember(householdId, memberId, title, body, kind) {
-  await supabase.from("notifications").insert({ household_id: householdId, member_id: memberId, title, body, kind });
+  const { data: inserted } = await supabase
+    .from("notifications")
+    .insert({ household_id: householdId, member_id: memberId, title, body, kind })
+    .select()
+    .single();
 
   const { data: subs } = await supabase.from("push_subscriptions").select("*").eq("member_id", memberId);
   let sent = 0;
@@ -102,7 +106,7 @@ async function notifyMember(householdId, memberId, title, body, kind) {
     try {
       await webpush.sendNotification(
         { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-        JSON.stringify({ title, body })
+        JSON.stringify({ title, body, notificationId: inserted?.id, kind })
       );
       sent++;
     } catch (err) {
@@ -131,12 +135,14 @@ Deno.serve(async (req) => {
       const jwt = authHeader.slice(7);
       const { data: userData } = await supabase.auth.getUser(jwt);
       if (userData?.user?.email) {
-        const { data: member } = await supabase
+        const { data: memberRows } = await supabase
           .from("members")
           .select("*")
           .eq("email", userData.user.email)
           .eq("is_admin", true)
-          .maybeSingle();
+          .order("created_at", { ascending: false })
+          .limit(1);
+        const member = memberRows?.[0];
         if (member) {
           authorized = true;
           scopedHouseholdId = member.household_id;

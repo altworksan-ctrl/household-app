@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { Bell, X, Check } from "lucide-react";
 import { supabase } from "../supabaseClient";
-import { SectionCard } from "./Shared";
+import NotificationDetailModal from "./NotificationDetailModal";
 
 function timeAgo(iso) {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -94,43 +93,7 @@ export default function NotificationsTab({ currentMember }) {
         </div>
       )}
 
-      {selected && (
-        <div
-          onClick={() => setSelected(null)}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
-          style={{ background: "rgba(20,22,17,0.6)" }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm rounded-2xl p-5"
-            style={{ background: "var(--stub)" }}
-          >
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
-                style={{ background: "var(--mustard)" }}
-              >
-                <Bell size={18} className="text-white" />
-              </div>
-              <button onClick={() => setSelected(null)} className="p-1 text-[var(--ink-soft)]">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="font-display font-bold text-xl">{selected.title}</div>
-            <div className="text-sm text-[var(--ink-soft)] mt-2 leading-relaxed">{selected.body}</div>
-            <div className="text-[10px] font-mono text-[var(--ink-soft)] mt-3">
-              {new Date(selected.created_at).toLocaleString("en-GB")}
-            </div>
-            <button
-              onClick={() => acknowledge(selected)}
-              className="w-full mt-5 flex items-center justify-center gap-2 rounded-xl py-3 font-semibold text-white"
-              style={{ background: selected.acknowledged_at ? "var(--ink-soft)" : "var(--moss)" }}
-            >
-              <Check size={16} /> {selected.acknowledged_at ? "Acknowledged" : "Okay, got it"}
-            </button>
-          </div>
-        </div>
-      )}
+      <NotificationDetailModal notification={selected} onAcknowledge={acknowledge} onClose={() => setSelected(null)} />
     </div>
   );
 }

@@ -7,8 +7,16 @@ import RotaTab from "./components/RotaTab";
 import MoneyTab from "./components/MoneyTab";
 import StatusTab from "./components/StatusTab";
 import NotificationsTab from "./components/NotificationsTab";
+import NotificationDetailModal from "./components/NotificationDetailModal";
 import MeTab from "./components/MeTab";
 import { tapeHex, monthKeyOf } from "./lib/helpers";
+
+const KIND_TO_TAB = {
+  rota: "rota",
+  payment: "status",
+  expense: "money",
+  "grocery-balance": "money",
+};
 
 const TABS = [
   { id: "rota", label: "Rota", icon: ChefHat },
@@ -31,6 +39,7 @@ export default function App() {
   const [rotaMonth, setRotaMonth] = useState(monthKeyOf(new Date()));
   const [moneyMonth, setMoneyMonth] = useState(monthKeyOf(new Date()));
   const [statusMonth, setStatusMonth] = useState(monthKeyOf(new Date()));
+  const [deepLinkNotification, setDeepLinkNotification] = useState(null);
 
   // -- auth session -----------------------------------------------------
   useEffect(() => {
@@ -119,6 +128,42 @@ export default function App() {
   const activeMembers = members.filter((m) => m.active);
   const isAdmin = !!currentMember?.is_admin;
 
+  // -- deep-linking from a tapped push notification ----------------------
+  const openNotificationById = useCallback(async (notificationId) => {
+    if (!notificationId) return;
+    const { data } = await supabase.from("notifications").select("*").eq("id", notificationId).maybeSingle();
+    if (data) {
+      setTab(KIND_TO_TAB[data.kind] || "alerts");
+      setDeepLinkNotification(data);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!currentMember) return;
+    const params = new URLSearchParams(window.location.search);
+    const notif = params.get("notif");
+    if (notif) {
+      openNotificationById(notif);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, [currentMember, openNotificationById]);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const handler = (event) => {
+      if (event.data?.type === "notification-click" && event.data.notificationId) {
+        openNotificationById(event.data.notificationId);
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, [openNotificationById]);
+
+  const acknowledgeDeepLink = async (n) => {
+    await supabase.from("notifications").update({ acknowledged_at: new Date().toISOString() }).eq("id", n.id);
+    setDeepLinkNotification(null);
+  };
+
   if (sessionLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--paper)" }}>
@@ -205,6 +250,12 @@ export default function App() {
             isAdmin={isAdmin}
           />
         )}
+
+        <NotificationDetailModal
+          notification={deepLinkNotification}
+          onAcknowledge={acknowledgeDeepLink}
+          onClose={() => setDeepLinkNotification(null)}
+        />
 
         <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto border-t" style={{ background: "var(--stub)", borderColor: "var(--line)" }}>
           <div className="grid grid-cols-5">
