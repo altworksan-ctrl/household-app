@@ -21,57 +21,90 @@ function Lightbox({ url, onClose }) {
   );
 }
 
-function LogPaymentRow({ member, owed, onLog }) {
+function BalanceRow({ member, owed, settled, onAdjust }) {
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
-
-  useEffect(() => {
-    if (open) setAmount(owed.toFixed(2));
-  }, [open, owed]);
+  const [sign, setSign] = useState("+");
 
   const submit = () => {
-    const amt = parseFloat(amount);
-    if (!amt || amt <= 0) return;
-    onLog(member.id, amt);
+    const val = parseFloat(amount);
+    if (!val || val <= 0 || isNaN(val)) return;
+    onAdjust(member.id, sign === "+" ? val : -val);
+    setAmount("");
+    setSign("+");
     setOpen(false);
   };
 
-  if (!open) {
-    return (
-      <div className="flex items-center justify-between text-sm">
-        <span className="font-semibold">{member.name}</span>
-        <div className="flex items-center gap-2">
-          <span className="font-mono font-semibold" style={{ color: "var(--rust)" }}>
-            {money(owed)}
+  return (
+    <div>
+      <div className="flex items-center justify-between text-sm gap-2">
+        <div className="min-w-0">
+          <div className="font-semibold truncate">{member.name}</div>
+          {settled > 0.01 && (
+            <div className="text-[10px] text-[var(--ink-soft)] mt-0.5">{money(settled)} settled so far</div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span
+            className="font-mono font-semibold"
+            style={{ color: owed > 0.01 ? "var(--rust)" : "var(--moss)" }}
+          >
+            {owed > 0.01 ? money(owed) : "Settled"}
           </span>
           <button
-            onClick={() => setOpen(true)}
+            onClick={() => setOpen((v) => !v)}
             className="text-xs font-semibold rounded-md px-2 py-1"
-            style={{ background: "var(--moss-tint)", color: "var(--moss)" }}
+            style={{ background: "var(--paper)", color: "var(--ink-soft)" }}
           >
-            Log payment
+            Adjust
           </button>
         </div>
       </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm font-semibold flex-1 truncate">{member.name}</span>
-      <input
-        inputMode="decimal"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-        className="w-20 rounded-lg border px-2 py-1.5 text-sm font-mono"
-        style={{ borderColor: "var(--line)" }}
-      />
-      <button onClick={submit} className="text-xs font-semibold rounded-md px-2 py-1.5 text-white" style={{ background: "var(--moss)" }}>
-        Save
-      </button>
-      <button onClick={() => setOpen(false)} className="text-xs text-[var(--ink-soft)] px-1">
-        Cancel
-      </button>
+      {open && (
+        <div className="mt-2 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg overflow-hidden border shrink-0" style={{ borderColor: "var(--line)" }}>
+              <button
+                onClick={() => setSign("+")}
+                className="w-9 py-1.5 font-bold"
+                style={{
+                  background: sign === "+" ? "var(--moss-tint)" : "transparent",
+                  color: sign === "+" ? "var(--moss)" : "var(--ink-soft)",
+                }}
+              >
+                +
+              </button>
+              <button
+                onClick={() => setSign("-")}
+                className="w-9 py-1.5 font-bold"
+                style={{
+                  background: sign === "-" ? "var(--rust-tint)" : "transparent",
+                  color: sign === "-" ? "var(--rust)" : "var(--ink-soft)",
+                }}
+              >
+                −
+              </button>
+            </div>
+            <input
+              inputMode="decimal"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+              className="flex-1 rounded-lg border px-2 py-1.5 text-sm font-mono"
+              style={{ borderColor: "var(--line)" }}
+            />
+            <button onClick={submit} className="text-xs font-semibold rounded-md px-3 py-1.5 text-white shrink-0" style={{ background: "var(--moss)" }}>
+              Save
+            </button>
+            <button onClick={() => setOpen(false)} className="text-xs text-[var(--ink-soft)] px-1 shrink-0">
+              Cancel
+            </button>
+          </div>
+          <div className="text-[10px] text-[var(--ink-soft)]">
+            + records a payment received. − corrects a mistake (e.g. logged too much).
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -168,7 +201,7 @@ export default function MoneyTab({
     return { id: m.id, name: m.name, color: tapeHex(m), owed: Math.max(0, share - paid - settled), settled };
   });
   const myBalance = balances.find((b) => b.id === currentMember?.id);
-  const owingMembers = balances.filter((b) => b.owed > 0.01 && !memberById[b.id]?.is_admin);
+  const nonAdminBalances = balances.filter((b) => !memberById[b.id]?.is_admin);
 
   const submit = async () => {
     const amt = parseFloat(amount);
@@ -222,7 +255,7 @@ export default function MoneyTab({
     load();
   };
 
-  const logPayment = async (memberId, amt) => {
+  const adjustSettlement = async (memberId, amt) => {
     await supabase.from("settlements").insert({
       household_id: householdId,
       member_id: memberId,
@@ -422,16 +455,22 @@ export default function MoneyTab({
       {isAdmin && (
         <>
           <div className="text-[10px] uppercase font-semibold text-[var(--ink-soft)] mb-1.5 px-1 flex items-center gap-1.5">
-            <Banknote size={12} /> Who owes you
+            <Banknote size={12} /> Balances
           </div>
           <SectionCard className="space-y-3">
-            {owingMembers.length === 0 ? (
+            {nonAdminBalances.length === 0 ? (
               <div className="text-sm text-[var(--ink-soft)] text-center py-2 flex items-center justify-center gap-1.5">
-                <CheckCircle2 size={14} /> Everyone's settled up.
+                <CheckCircle2 size={14} /> No housemates to track yet.
               </div>
             ) : (
-              owingMembers.map((b) => (
-                <LogPaymentRow key={b.id} member={{ id: b.id, name: b.name }} owed={b.owed} onLog={logPayment} />
+              nonAdminBalances.map((b) => (
+                <BalanceRow
+                  key={b.id}
+                  member={{ id: b.id, name: b.name }}
+                  owed={b.owed}
+                  settled={b.settled}
+                  onAdjust={adjustSettlement}
+                />
               ))
             )}
           </SectionCard>
