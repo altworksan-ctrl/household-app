@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
+import { Trash2, X } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import NotificationDetailModal from "./NotificationDetailModal";
 
@@ -13,6 +14,8 @@ function timeAgo(iso) {
   if (days < 7) return `${days}d ago`;
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 export default function NotificationsTab({ currentMember }) {
   const [items, setItems] = useState([]);
@@ -35,6 +38,19 @@ export default function NotificationsTab({ currentMember }) {
     load();
   }, [load]);
 
+  // quietly clean up old, already-acknowledged notifications so the list
+  // doesn't grow forever — never touches anything still unread
+  useEffect(() => {
+    const cutoff = new Date(Date.now() - THIRTY_DAYS_MS).toISOString();
+    supabase
+      .from("notifications")
+      .delete()
+      .eq("member_id", currentMember.id)
+      .not("acknowledged_at", "is", null)
+      .lt("acknowledged_at", cutoff)
+      .then(() => {});
+  }, [currentMember.id]);
+
   useEffect(() => {
     const channel = supabase
       .channel(`notifications-${currentMember.id}`)
@@ -55,10 +71,28 @@ export default function NotificationsTab({ currentMember }) {
     load();
   };
 
+  const deleteOne = async (id, e) => {
+    e.stopPropagation();
+    await supabase.from("notifications").delete().eq("id", id);
+    load();
+  };
+
+  const clearRead = async () => {
+    await supabase.from("notifications").delete().eq("member_id", currentMember.id).not("acknowledged_at", "is", null);
+    load();
+  };
+
+  const hasRead = items.some((n) => n.acknowledged_at);
+
   return (
     <div className="px-4 pt-4 pb-24">
-      <div className="text-[10px] uppercase font-semibold text-[var(--ink-soft)] mb-1.5 px-1">
-        Recent notifications
+      <div className="flex items-center justify-between mb-1.5 px-1">
+        <div className="text-[10px] uppercase font-semibold text-[var(--ink-soft)]">Recent notifications</div>
+        {hasRead && (
+          <button onClick={clearRead} className="text-xs font-semibold text-[var(--ink-soft)] underline">
+            Clear read
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -87,6 +121,9 @@ export default function NotificationsTab({ currentMember }) {
                 <div className="text-[10px] font-mono text-[var(--ink-soft)] shrink-0 mt-0.5">
                   {timeAgo(n.created_at)}
                 </div>
+                <button onClick={(e) => deleteOne(n.id, e)} className="p-1 text-[var(--ink-soft)] shrink-0">
+                  <X size={14} />
+                </button>
               </button>
             );
           })}
